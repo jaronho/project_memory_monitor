@@ -226,8 +226,13 @@ void setExcelHeader() {
 void setExcelRow(unsigned int index, double workingSetSizeMb, double workSetPrivateMb, double workSetSharedMb, unsigned long handes, unsigned long threads) {
 	std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
 
+	time_t now;
+	time(&now);
+	struct tm t = *localtime(&now);
+	char datetime[22] = { 0 };
+	strftime(datetime, sizeof(datetime), "%Y-%m-%d %H:%M:%S", &t);
 	g_excelSheet.cell("A" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
-	g_excelSheet.cell("A" + std::to_string(index)).value(xlnt::datetime::now());
+	g_excelSheet.cell("A" + std::to_string(index)).value(datetime);
 
 	g_excelSheet.cell("B" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("B" + std::to_string(index)).number_format(xlnt::number_format::number_comma_separated1());
