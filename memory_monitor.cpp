@@ -1,4 +1,5 @@
 #include <direct.h>
+#include <math.h>
 #include <time.h>
 #include <io.h>
 #include <exception>
@@ -9,22 +10,9 @@
 #include "logger/Logger.h"
 /* 下面头文件在最后面包含 */
 #include <Windows.h>
+#include <TlHelp32.h>
 #include <Psapi.h>
 #pragma comment(lib, "psapi.lib")
-
-int finish()
-{
-	std::string cmd;
-	while (std::cin >> cmd)
-	{
-		if ("exit" == cmd || "quit" == cmd || "q" == cmd)
-		{
-			std::cout << "exit application !!!" << std::endl;
-			break;
-		}
-	}
-	return 0;
-}
 
 unsigned long long generateUID(void) {
 	static int sY = 0, sM = 0, sD = 0, sH = 0, sMM = 0, sS = 0, sIdx = 1;
@@ -64,18 +52,27 @@ bool adjustPurview() {
 	return (TRUE == ret);
 }
 
-/* 查询进程内存 */
-void queryProcessMemory(DWORD processId, unsigned long& workingSetSize, unsigned long& workSetShared, unsigned long& workSetPrivate) {
-	workingSetSize = workSetShared = workSetPrivate = 0;
+/* 查询进程信息 */
+void queryProcessInfo(unsigned long processId,
+	unsigned long& workingSetSize, unsigned long& workSetPrivate, unsigned long& workSetShared,
+	unsigned long& handles,
+	unsigned long& threads) {
+	workingSetSize = workSetPrivate = workSetShared = 0;
+	handles = 0;
+	threads = 0;
 	adjustPurview();
 	/* 获取进程句柄 */
 	HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processId);
 	if (!hProcess) {
 		return;
 	}
-	/* 获取工作集(内存) */
+	/* 查询工作集(内存) */
 	PROCESS_MEMORY_COUNTERS pmc;
 	GetProcessMemoryInfo(hProcess, &pmc, sizeof(pmc));
+	if (0 == pmc.QuotaPagedPoolUsage && 0 == pmc.QuotaNonPagedPoolUsage) {	/* 视为进程退出 */
+		CloseHandle(hProcess);
+		return;
+	}
 	workingSetSize = pmc.WorkingSetSize; /* 工作集(内存)(单位:字节): 进程当前正在使用的物理内存量, =内存(专用工作集)+内存(共享工作集) */
 	/* 获取系统分页大小(单位:字节) */
 	static SIZE_T s_pageSize = 0;
@@ -128,74 +125,139 @@ void queryProcessMemory(DWORD processId, unsigned long& workingSetSize, unsigned
 				}
 			}
 		}
-        /* 需要最后清理内存, 否则会出错 */
+		/* 需要最后清理内存, 否则会出错 */
 		if (pByte) {
 			delete[] pByte;
 			pByte = NULL;
 		}
 	}
+	/* 查询句柄数 */
+	GetProcessHandleCount(hProcess, &handles);
+	/* 查询线程数 */
+	HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (INVALID_HANDLE_VALUE != hProcessSnap)
+	{
+		char szFilePath[MAX_PATH] = { 0 };
+		PROCESSENTRY32 stProcessEntry32 = { 0 };
+		stProcessEntry32.dwSize = sizeof(stProcessEntry32);
+		BOOL bSucceed = Process32First(hProcessSnap, &stProcessEntry32);;
+		for (;;)
+		{
+			if (!bSucceed) {
+				break;
+			}
+			if (stProcessEntry32.th32ProcessID == processId)
+			{
+				threads = stProcessEntry32.cntThreads;
+				break;
+			}
+			bSucceed = Process32Next(hProcessSnap, &stProcessEntry32);
+		}
+		CloseHandle(hProcessSnap);
+	}
 	/* 关闭进程句柄 */
 	CloseHandle(hProcess);
 }
 
-/* 定时监控 */
-void threadHandler(unsigned int pid, unsigned int memorySize, unsigned int frequence) {
+/* 监控句柄 */
+void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int frequence) {
 	int preWorkingSetSizeKb = 0;
-	int preWorkSetSharedKb = 0;
 	int preWorkSetPrivateKb = 0;
+	int preWorkSetSharedKb = 0;
 	bool isInit = true;
 	while (1) {
-		unsigned long workingSetSize, workSetShared, workSetPrivate;
-		queryProcessMemory(pid, workingSetSize, workSetShared, workSetPrivate);
+		unsigned long workingSetSize, workSetPrivate, workSetShared;
+		unsigned long handles;
+		unsigned long threads;
+		queryProcessInfo(pid, workingSetSize, workSetPrivate, workSetShared, handles, threads);
 		if (0 == workingSetSize) {
+			Logger::getInstance()->print("", "", false, false);
 			Logger::getInstance()->print("Can't find process with pid[" + std::to_string(pid) + "]", "", false, true);
 			break;
 		}
+		if (0 == workSetPrivate || 0 == workSetShared) {
+			continue;
+		}
 		/* 字节转Kb */
 		int workingSetSizeKb = workingSetSize / 1024;
-		int workSetSharedKb = workSetShared / 1024;
 		int workSetPrivateKb = workSetPrivate / 1024;
-		/* 判断内存是增长还是减少 */
-		bool up = (workingSetSizeKb > preWorkingSetSizeKb);
+		int workSetSharedKb = workSetShared / 1024;
 		/* 计算内存差值(单位:Kb) */
-		int diffWorkingSetSizeKb = std::abs(workingSetSizeKb - preWorkingSetSizeKb);
-		int diffWorkSetSharedKb = std::abs(workSetSharedKb - preWorkSetSharedKb);
-		int diffWorkSetPrivateKb = std::abs(workSetPrivateKb - preWorkSetPrivateKb);
-		if ((unsigned int)diffWorkingSetSizeKb >= memorySize) {	/* 内存变动超过监控值 */
+		int diffWorkingSetSizeKb = workingSetSizeKb - preWorkingSetSizeKb;
+		int diffWorkSetPrivateKb = workSetPrivateKb - preWorkSetPrivateKb;
+		int diffWorkSetSharedKb = workSetSharedKb - preWorkSetSharedKb;
+		if ((unsigned int)abs(diffWorkingSetSizeKb) >= memorySize) {	/* 内存变动超过监控值 */
 			/* 缓存当前内存值 */
 			preWorkingSetSizeKb = workingSetSizeKb;
-			preWorkSetSharedKb = workSetSharedKb;
 			preWorkSetPrivateKb = workSetPrivateKb;
+			preWorkSetSharedKb = workSetSharedKb;
 			/* Kb转Mb */
 			double workingSetSizeMb = (double)workingSetSizeKb / 1024;
-			double workSetSharedMb = (double)workSetSharedKb / 1024;
 			double workSetPrivateMb = (double)workSetPrivateKb / 1024;
+			double workSetSharedMb = (double)workSetSharedKb / 1024;
 			/* 打印日志 */
 			try {
 				char buf[256] = { 0 };
 				if (isInit) {	/* 首次 */
 					isInit = false;
-					sprintf_s(buf, "Now Memory, WorkingSetSize[%d Kb, %0.1f Mb], WorkSetShared[%d Kb, %0.1f Mb], WorkSetPrivate[%d Kb, %0.1f Mb]",
-						workingSetSizeKb, workingSetSizeMb, workSetSharedKb, workSetSharedMb, workSetPrivateKb, workSetPrivateMb);
+					sprintf_s(buf, "Memory: WorkingSet %0.1f Mb(%d Kb), Private %0.1f Mb(%d Kb), Shared %0.1f Mb(%d Kb)",
+						workingSetSizeMb, workingSetSizeKb, workSetPrivateMb, workSetPrivateKb, workSetSharedMb, workSetSharedKb);
+					Logger::getInstance()->print(buf, "", false, true);
+					memset(buf, 0, sizeof(buf));
+					sprintf_s(buf, "Handles: %d", handles);
+					Logger::getInstance()->print(buf, "", false, true);
+					memset(buf, 0, sizeof(buf));
+					sprintf_s(buf, "Threads: %d", threads);
+					Logger::getInstance()->print(buf, "", false, true);
+					Logger::getInstance()->print("", "", false, false);
 				}
 				else {	/* 非首次 */
-					/* 设置内存增长/减少符号 */
-					std::string flag = up ? "+" : "-";
 					/* 内存差值单位Kb转Mb */
 					double diffWorkingSetSizeMb = (double)diffWorkingSetSizeKb / 1024;
-					double diffWorkSetSharedMb = (double)diffWorkSetSharedKb / 1024;
 					double diffWorkSetPrivateMb = (double)diffWorkSetPrivateKb / 1024;
-					sprintf_s(buf, "WorkingSet[(%d Kb, %0.1f Mb), %s(%d Kb, %0.1f Mb)], Shared[(%d Kb, %0.1f Mb), %s(%d Kb, %0.1f Mb)], Private[(%d Kb, %0.1f Mb), %s(%d Kb, %0.1f Mb)]",
-						workingSetSizeKb, workingSetSizeMb, flag.c_str(), diffWorkingSetSizeKb, diffWorkingSetSizeMb,
-						workSetSharedKb, workSetSharedMb, flag.c_str(), diffWorkSetSharedKb, diffWorkSetSharedMb,
-						workSetPrivateKb, workSetPrivateMb, flag.c_str(), diffWorkSetPrivateKb, diffWorkSetPrivateMb);
+					double diffWorkSetSharedMb = (double)diffWorkSetSharedKb / 1024;
+					Logger::getInstance()->print("--------------------------------------------------------------------------------", "", false, true);
+					if (0 == diffWorkingSetSizeKb) {
+						sprintf_s(buf, "                     Memory: WorkingSet %0.1f Mb(%d Kb)", workingSetSizeMb, workingSetSizeKb);
+					}
+					else {
+						sprintf_s(buf, "                     Memory: WorkingSet %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
+							workingSetSizeMb, workingSetSizeKb, diffWorkingSetSizeKb > 0 ? "+" : "-", abs(diffWorkingSetSizeMb), abs(diffWorkingSetSizeKb));
+					}
+					Logger::getInstance()->print(buf, "", false, false);
+					memset(buf, 0, sizeof(buf));
+					if (0 == diffWorkSetPrivateKb) {
+						sprintf_s(buf, "                                Private %0.1f Mb(%d Kb)", workSetPrivateMb, workSetPrivateKb);
+					}
+					else {
+						sprintf_s(buf, "                                Private %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
+							workSetPrivateMb, workSetPrivateKb, diffWorkSetPrivateKb > 0 ? "+" : "-", abs(diffWorkSetPrivateMb), abs(diffWorkSetPrivateKb));
+					}
+					Logger::getInstance()->print(buf, "", false, false);
+					memset(buf, 0, sizeof(buf));
+					if (0 == diffWorkSetSharedKb) {
+						sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb", workSetSharedMb, workSetSharedKb);
+					}
+					else {
+						sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
+							workSetSharedMb, workSetSharedKb, diffWorkSetSharedKb > 0 ? "+" : "-", abs(diffWorkSetSharedMb), abs(diffWorkSetSharedKb));
+					}
+					Logger::getInstance()->print(buf, "", false, false);
+					memset(buf, 0, sizeof(buf));
+					sprintf_s(buf, "                     Handles: %d", handles);
+					Logger::getInstance()->print(buf, "", false, false);
+					memset(buf, 0, sizeof(buf));
+					sprintf_s(buf, "                     Threads: %d", threads);
+					Logger::getInstance()->print(buf, "", false, false);
 				}
-				Logger::getInstance()->print(buf, "", false, true);
+
 			}
 			catch (const std::exception& e) {
-				Logger::getInstance()->print(e.what(), "", false, true);
+				Logger::getInstance()->print("", "", false, false);
+				Logger::getInstance()->print("execption: " + std::string(e.what()), "", false, true);
 			}
 			catch (...) {
+				Logger::getInstance()->print("", "", false, false);
 				Logger::getInstance()->print("unknow exception", "", false, true);
 			}
 
@@ -258,16 +320,14 @@ int main(int argc, char* argv[]) {
 	std::string filename = dirname + "pid[" + std::to_string(pid) + "]-" + generateFilename(".log");
 	Logger::getInstance()->setFilename(filename);
 	/* 初始打印 */
-	std::cout << "Enter 'q' or 'exit' or 'quit' to finish application: " << std::endl;
 	Logger::getInstance()->print("Start monitor memory size", "", false, true);
 	double sizeMb = (double)memorySize / 1024;
 	char buf[64] = { 0 };
-	sprintf_s(buf, "memory size: %d Kb, %0.1f Mb", memorySize, sizeMb);
+	sprintf_s(buf, "memory size: %0.1f Mb(%d Kb)", sizeMb, memorySize);
 	Logger::getInstance()->print(buf, "", false, true);
 	Logger::getInstance()->print("frequence: " + std::to_string(frequence) + " s", "", false, true);
-	/* 开辟子线程 */
-	std::thread th(threadHandler, pid, memorySize, frequence);
-	th.detach();
-	/* 等待退出 */
-	return finish();
+	/* 监控 */
+	monitorHandler(pid, memorySize, frequence);
+	return 0;
 }
+
