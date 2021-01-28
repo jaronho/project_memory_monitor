@@ -1,18 +1,24 @@
 #include <direct.h>
-#include <math.h>
-#include <time.h>
 #include <io.h>
+#include <math.h>
+#include <string.h>
+#include <time.h>
 #include <exception>
 #include <iostream>
 #include <string>
 #include <thread>
 #include "cmdline/cmdline.h"
 #include "logger/Logger.h"
+#include <xlnt/xlnt.hpp>
 /* 下面头文件在最后面包含 */
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <Psapi.h>
 #pragma comment(lib, "psapi.lib")
+
+xlnt::workbook g_excel;
+xlnt::worksheet g_excelSheet = g_excel.active_sheet();
+std::string g_excelFilename;
 
 unsigned long long generateUID(void) {
 	static int sY = 0, sM = 0, sD = 0, sH = 0, sMM = 0, sS = 0, sIdx = 1;
@@ -159,12 +165,91 @@ void queryProcessInfo(unsigned long processId,
 	CloseHandle(hProcess);
 }
 
+/* 保存excel文件 */
+void saveExcelFile() {
+	if (g_excelFilename.empty()) {
+		return;
+	}
+	g_excel.save(g_excelFilename);
+}
+
+/* 设置excel标题头 */
+void setExcelHeader() {
+	/* 日期 */
+	g_excelSheet.column_properties(xlnt::column_t("A")).width = 19.38;
+	g_excelSheet.cell("A1").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("A1").font(xlnt::font().bold(true));
+	g_excelSheet.cell("A1").value("Datetime");
+	g_excelSheet.merge_cells("A1:A2");
+	/* 内存 */
+	g_excelSheet.column_properties(xlnt::column_t("B")).width = 14.75;
+	g_excelSheet.cell("B1").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("B1").font(xlnt::font().bold(true));
+	g_excelSheet.cell("B1").value("Memory(Mb)");
+	g_excelSheet.merge_cells("B1:D1");
+	/* 工作集 */
+	g_excelSheet.cell("B2").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("B2").font(xlnt::font().bold(true));
+	g_excelSheet.cell("B2").value("WorkingSetSize");
+	/* 专用 */
+	g_excelSheet.column_properties(xlnt::column_t("C")).width = 14.38;
+	g_excelSheet.cell("C2").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("C2").font(xlnt::font().bold(true));
+	g_excelSheet.cell("C2").value("WorkSetPrivate");
+	/* 共用 */
+	g_excelSheet.column_properties(xlnt::column_t("D")).width = 14.5;
+	g_excelSheet.cell("D2").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("D2").font(xlnt::font().bold(true));
+	g_excelSheet.cell("D2").value("WorkSetShared");
+	/* 句柄数 */
+	g_excelSheet.column_properties(xlnt::column_t("E")).width = 7.88;
+	g_excelSheet.cell("E1").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("E1").font(xlnt::font().bold(true));
+	g_excelSheet.cell("E1").value("Handles");
+	g_excelSheet.merge_cells("E1:E2");
+	/* 线程数 */
+	g_excelSheet.column_properties(xlnt::column_t("F")).width = 7.63;
+	g_excelSheet.cell("F1").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("F1").font(xlnt::font().bold(true));
+	g_excelSheet.cell("F1").value("Threads");
+	g_excelSheet.merge_cells("F1:F2");
+
+	saveExcelFile();
+}
+
+/* 设置excel行内容 */
+void setExcelRow(unsigned int index, double workingSetSizeMb, double workSetPrivateMb, double workSetSharedMb, unsigned long handes, unsigned long threads) {
+	g_excelSheet.cell("A" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("A" + std::to_string(index)).value(xlnt::datetime::now());
+
+	g_excelSheet.cell("B" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("B" + std::to_string(index)).number_format(xlnt::number_format::number_comma_separated1());
+	g_excelSheet.cell("B" + std::to_string(index)).value(workingSetSizeMb);
+
+	g_excelSheet.cell("C" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("C" + std::to_string(index)).number_format(xlnt::number_format::number_comma_separated1());
+	g_excelSheet.cell("C" + std::to_string(index)).value(workSetPrivateMb);
+
+	g_excelSheet.cell("D" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("D" + std::to_string(index)).number_format(xlnt::number_format::number_comma_separated1());
+	g_excelSheet.cell("D" + std::to_string(index)).value(workSetSharedMb);
+
+	g_excelSheet.cell("E" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("E" + std::to_string(index)).value((unsigned int)handes);
+
+	g_excelSheet.cell("F" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("F" + std::to_string(index)).value((unsigned int)threads);
+
+	saveExcelFile();
+}
+
 /* 监控句柄 */
 void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int frequence) {
 	int preWorkingSetSizeKb = 0;
 	int preWorkSetPrivateKb = 0;
 	int preWorkSetSharedKb = 0;
 	bool isInit = true;
+	unsigned long index = 3;	/* 由于标题占用了2行, 所以这里需要从第3行开始 */
 	while (1) {
 		unsigned long workingSetSize, workSetPrivate, workSetShared;
 		unsigned long handles;
@@ -250,7 +335,6 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 					sprintf_s(buf, "                     Threads: %d", threads);
 					Logger::getInstance()->print(buf, "", false, false);
 				}
-
 			}
 			catch (const std::exception& e) {
 				Logger::getInstance()->print("", "", false, false);
@@ -260,7 +344,8 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 				Logger::getInstance()->print("", "", false, false);
 				Logger::getInstance()->print("unknow exception", "", false, true);
 			}
-
+			/* 写入excel */
+			setExcelRow(index++, workingSetSizeMb, workSetPrivateMb, workSetSharedMb, handles, threads);
 		}
 		std::this_thread::sleep_for(std::chrono::seconds(frequence));
 	}
@@ -310,15 +395,19 @@ int main(int argc, char* argv[]) {
 	{
 		frequence = 1;
 	}
-	/* 设置输出文件名 */
+	/* 生成文件名 */
 	std::string dirname = "log/";
 	if (0 != _access(dirname.c_str(), 0)) {
 		if (0 != _mkdir(dirname.c_str())) {
 			dirname.clear();
 		}
 	}
-	std::string filename = dirname + "pid[" + std::to_string(pid) + "]-" + generateFilename(".log");
-	Logger::getInstance()->setFilename(filename);
+	std::string filenamePrefx = dirname + "pid[" + std::to_string(pid) + "]-";
+	/* 设置日志文件名 */
+	Logger::getInstance()->setFilename(filenamePrefx + generateFilename(".log"));
+	/* 设置excel文件名 */
+	g_excelFilename = filenamePrefx + generateFilename(".xlsx");
+	setExcelHeader();
 	/* 初始打印 */
 	Logger::getInstance()->print("Start monitor memory size", "", false, true);
 	double sizeMb = (double)memorySize / 1024;
