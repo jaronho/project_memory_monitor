@@ -21,11 +21,11 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="proj_memory_monitor.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="logger\Logger.cpp">
       <Filter>源文件\logger</Filter>
+    </ClCompile>
+    <ClCompile Include="memory_monitor.cpp">
+      <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
