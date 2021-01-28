@@ -236,7 +236,7 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 					Logger::getInstance()->print(buf, "", false, false);
 					memset(buf, 0, sizeof(buf));
 					if (0 == diffWorkSetSharedKb) {
-						sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb", workSetSharedMb, workSetSharedKb);
+						sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb)", workSetSharedMb, workSetSharedKb);
 					}
 					else {
 						sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
