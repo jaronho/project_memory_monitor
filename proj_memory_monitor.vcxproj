@@ -142,7 +142,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="logger\Logger.cpp" />
-    <ClCompile Include="proj_memory_monitor.cpp" />
+    <ClCompile Include="memory_monitor.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cmdline\cmdline.h" />
