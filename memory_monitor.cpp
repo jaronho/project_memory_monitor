@@ -5,6 +5,7 @@
 #include <time.h>
 #include <exception>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include "cmdline/cmdline.h"
@@ -18,7 +19,9 @@
 
 xlnt::workbook g_excel;
 xlnt::worksheet g_excelSheet = g_excel.active_sheet();
-std::string g_excelFilename;
+std::string g_excelFilename;	/* excel文件名 */
+unsigned long g_excelIndex = 2;	/* 由于标题占用了2行, 所以这里需要从第3行开始 */
+std::recursive_mutex m_excelMutex;
 
 unsigned long long generateUID(void) {
 	static int sY = 0, sM = 0, sD = 0, sH = 0, sMM = 0, sS = 0, sIdx = 1;
@@ -175,6 +178,8 @@ void saveExcelFile() {
 
 /* 设置excel标题头 */
 void setExcelHeader() {
+	std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
+
 	/* 日期 */
 	g_excelSheet.column_properties(xlnt::column_t("A")).width = 19.38;
 	g_excelSheet.cell("A1").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
@@ -219,6 +224,8 @@ void setExcelHeader() {
 
 /* 设置excel行内容 */
 void setExcelRow(unsigned int index, double workingSetSizeMb, double workSetPrivateMb, double workSetSharedMb, unsigned long handes, unsigned long threads) {
+	std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
+
 	g_excelSheet.cell("A" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("A" + std::to_string(index)).value(xlnt::datetime::now());
 
@@ -243,13 +250,26 @@ void setExcelRow(unsigned int index, double workingSetSizeMb, double workSetPriv
 	saveExcelFile();
 }
 
+/* 设置excel标记 */
+void setExcelTag(unsigned int index, const std::string& tag) {
+	std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
+
+	g_excelSheet.cell("G" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("G" + std::to_string(index)).fill(xlnt::fill::solid(xlnt::color(xlnt::rgb_color(255, 192, 0))));
+	/* 标记累加 */
+	std::string newTag = g_excelSheet.cell("G" + std::to_string(index)).to_string();
+	newTag += (newTag.empty() ? "" : ",") + tag;
+	g_excelSheet.cell("G" + std::to_string(index)).value(newTag);
+
+	saveExcelFile();
+}
+
 /* 监控句柄 */
 void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int frequence) {
 	int preWorkingSetSizeKb = 0;
 	int preWorkSetPrivateKb = 0;
 	int preWorkSetSharedKb = 0;
 	bool isInit = true;
-	unsigned long index = 3;	/* 由于标题占用了2行, 所以这里需要从第3行开始 */
 	while (1) {
 		unsigned long workingSetSize, workSetPrivate, workSetShared;
 		unsigned long handles;
@@ -257,7 +277,7 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 		queryProcessInfo(pid, workingSetSize, workSetPrivate, workSetShared, handles, threads);
 		if (0 == workingSetSize) {
 			Logger::getInstance()->print("", "", false, false);
-			Logger::getInstance()->print("Can't find process with pid[" + std::to_string(pid) + "]", "", false, true);
+			Logger::getInstance()->print("Can't find process with pid[" + std::to_string(pid) + "] !!!", "", false, true);
 			break;
 		}
 		if (0 == workSetPrivate || 0 == workSetShared) {
@@ -294,14 +314,13 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 					memset(buf, 0, sizeof(buf));
 					sprintf_s(buf, "Threads: %d", threads);
 					Logger::getInstance()->print(buf, "", false, true);
-					Logger::getInstance()->print("", "", false, false);
 				}
 				else {	/* 非首次 */
 					/* 内存差值单位Kb转Mb */
 					double diffWorkingSetSizeMb = (double)diffWorkingSetSizeKb / 1024;
 					double diffWorkSetPrivateMb = (double)diffWorkSetPrivateKb / 1024;
 					double diffWorkSetSharedMb = (double)diffWorkSetSharedKb / 1024;
-					Logger::getInstance()->print("--------------------------------------------------------------------------------", "", false, true);
+					Logger::getInstance()->print("----------------------------------------------------------------------", "", false, true);
 					if (0 == diffWorkingSetSizeKb) {
 						sprintf_s(buf, "                     Memory: WorkingSet %0.1f Mb(%d Kb)", workingSetSizeMb, workingSetSizeKb);
 					}
@@ -345,7 +364,13 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 				Logger::getInstance()->print("unknow exception", "", false, true);
 			}
 			/* 写入excel */
-			setExcelRow(index++, workingSetSizeMb, workSetPrivateMb, workSetSharedMb, handles, threads);
+			unsigned long index = 0;
+			{
+				std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
+				g_excelIndex += 1;
+				index = g_excelIndex;
+			}
+			setExcelRow(index, workingSetSizeMb, workSetPrivateMb, workSetSharedMb, handles, threads);
 		}
 		std::this_thread::sleep_for(std::chrono::seconds(frequence));
 	}
@@ -355,8 +380,8 @@ int main(int argc, char* argv[]) {
 	/* 命令行解析 */
 	cmdline::parser cl;
 	cl.add<unsigned int>("pid", 'p', "process id", true);
-	cl.add<unsigned int>("msize", 'm', "monitor value for memory size(Kb) change", false, 1, cmdline::range(1, 102400)); /* 1Kb~100Mb */
-	cl.add<unsigned int>("freq", 'f', "frequence(Seconds)", false, 1, cmdline::range(1, 86400));	/* 1s~1天 */
+	cl.add<unsigned int>("size", 's', "memory fluctuation size(Kb)", false, 1, cmdline::range(1, 102400)); /* 1Kb~100Mb */
+	cl.add<unsigned int>("freq", 'f', "monitoring frequence(Seconds)", false, 1, cmdline::range(1, 86400));	/* 1s~1天 */
 	cl.add("help", 0, "print this message");
 	cl.set_program_name("memory_monitor");
 	if (!cl.parse(argc, argv)) {
@@ -374,26 +399,26 @@ int main(int argc, char* argv[]) {
 	}
 	if (0 == pid)
 	{
-		std::cerr << "pid is 0" << std::endl;
+		std::cerr << "pid is 0" << std::endl << cl.usage();
 		return 0;
 	}
 	/* 内存监控大小 */
-	unsigned int memorySize = 0;
-	if (cl.exist("msize")) {
-		memorySize = cl.get<unsigned int>("msize");
+	unsigned int size = 0;
+	if (cl.exist("size")) {
+		size = cl.get<unsigned int>("size");
 	}
-	if (0 == memorySize)
+	if (0 == size)
 	{
-		memorySize = 512;
+		size = 512;
 	}
 	/* 监控频率 */
-	unsigned int frequence = 0;
+	unsigned int freq = 0;
 	if (cl.exist("freq")) {
-		frequence = cl.get<unsigned int>("freq");
+		freq = cl.get<unsigned int>("freq");
 	}
-	if (0 == frequence)
+	if (0 == freq)
 	{
-		frequence = 1;
+		freq = 1;
 	}
 	/* 生成文件名 */
 	std::string dirname = "log/";
@@ -409,14 +434,45 @@ int main(int argc, char* argv[]) {
 	g_excelFilename = filenamePrefx + generateFilename(".xlsx");
 	setExcelHeader();
 	/* 初始打印 */
-	Logger::getInstance()->print("Start monitor memory size", "", false, true);
-	double sizeMb = (double)memorySize / 1024;
+	std::cout << "Note: 1. you can enter 'exit' or 'quit' or 'q' to exit application !!!" << std::endl;
+	std::cout << "      2. you can enter a string starting with 'tag=' to mark log sometime !!!" << std::endl;
+	std::cout << "         e.g. 'tag=mytag'" << std::endl << std::endl;
+	Logger::getInstance()->print("Start monitoring memory fluctuations", "", false, true);
+	double sizeMb = (double)size / 1024;
 	char buf[64] = { 0 };
-	sprintf_s(buf, "memory size: %0.1f Mb(%d Kb)", sizeMb, memorySize);
+	sprintf_s(buf, "memory fluctuation size: %0.1f Mb(%d Kb)", sizeMb, size);
 	Logger::getInstance()->print(buf, "", false, true);
-	Logger::getInstance()->print("frequence: " + std::to_string(frequence) + " s", "", false, true);
-	/* 监控 */
-	monitorHandler(pid, memorySize, frequence);
+	Logger::getInstance()->print("monitoring freq: " + std::to_string(freq) + " s", "", false, true);
+	/* 创建监控线程 */
+	std::thread th([&]() {
+		monitorHandler(pid, size, freq);
+		exit(0);
+		});
+	th.detach();
+	/* 接收输入 */
+	const std::string TAG = "tag=";
+	std::string cmd;
+	while (std::cin >> cmd)
+	{
+		if ("exit" == cmd || "quit" == cmd || "q" == cmd)
+		{
+			Logger::getInstance()->print("exit application !!!", "", false, true);
+			break;
+		}
+		else {
+			std::size_t p = cmd.find(TAG);
+			if (std::string::npos != p && TAG != cmd) {
+				std::string tag = cmd.substr(p + TAG.length(), cmd.length() - TAG.length());
+				Logger::getInstance()->print(tag, "tag", true, true);
+				unsigned long index = 0;
+				{
+					std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
+					index = g_excelIndex;
+				}
+				setExcelTag(index, tag);
+			}
+		}
+	}
 	return 0;
 }
 
