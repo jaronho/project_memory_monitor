@@ -514,7 +514,7 @@ int main(int argc, char* argv[]) {
 	char buf[64] = { 0 };
 	sprintf_s(buf, "memory fluctuation size: %0.1f Mb(%d Kb)", sizeMb, size);
 	Logger::getInstance()->print(buf, "", false, true);
-	Logger::getInstance()->print("monitoring freq: " + std::to_string(freq) + " s", "", false, true);
+	Logger::getInstance()->print("monitoring frequency: " + std::to_string(freq) + " s", "", false, true);
 	/* 创建监控线程 */
 	std::thread th([&]() {
 		while (1) {
