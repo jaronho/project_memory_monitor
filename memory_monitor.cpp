@@ -3,6 +3,7 @@
 #include <math.h>
 #include <string.h>
 #include <time.h>
+#include <atomic>
 #include <exception>
 #include <iostream>
 #include <mutex>
@@ -19,10 +20,15 @@
 
 #define VERSION "1.0"
 
+std::atomic_bool g_isInit = true;
+std::atomic_int32_t g_preWorkingSetSizeKb = 0;
+std::atomic_int32_t g_preWorkSetPrivateKb = 0;
+std::atomic_int32_t g_preWorkSetSharedKb = 0;
+
 xlnt::workbook g_excel;
 xlnt::worksheet g_excelSheet = g_excel.active_sheet();
 std::string g_excelFilename;	/* excel文件名 */
-unsigned long g_excelIndex = 2;	/* 由于标题占用了2行, 所以这里需要从第3行开始 */
+std::atomic_ulong g_excelIndex = 2;	/* 由于标题占用了2行, 所以这里需要从第3行开始 */
 std::recursive_mutex m_excelMutex;
 
 unsigned long long generateUID(void) {
@@ -301,116 +307,93 @@ void setExcelTag(unsigned int index, const std::string& tag) {
 	saveExcelFile();
 }
 
-/* 监控句柄 */
-void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int frequence) {
-	int preWorkingSetSizeKb = 0;
-	int preWorkSetPrivateKb = 0;
-	int preWorkSetSharedKb = 0;
-	bool isInit = true;
-	while (1) {
-		unsigned long workingSetSize, workSetPrivate, workSetShared;
-		unsigned long handles;
-		unsigned long threads;
-		queryProcessInfo(pid, workingSetSize, workSetPrivate, workSetShared, handles, threads);
-		if (0 == workingSetSize) {
-			Logger::getInstance()->print("", "", false, false);
-			Logger::getInstance()->print("Can't find process with pid[" + std::to_string(pid) + "] !!!", "", false, true);
-			break;
-		}
-		if (0 == workSetPrivate || 0 == workSetShared) {
-			continue;
-		}
-		/* 字节转Kb */
-		int workingSetSizeKb = workingSetSize / 1024;
-		int workSetPrivateKb = workSetPrivate / 1024;
-		int workSetSharedKb = workSetShared / 1024;
-		/* 计算内存差值(单位:Kb) */
-		int diffWorkingSetSizeKb = workingSetSizeKb - preWorkingSetSizeKb;
-		int diffWorkSetPrivateKb = workSetPrivateKb - preWorkSetPrivateKb;
-		int diffWorkSetSharedKb = workSetSharedKb - preWorkSetSharedKb;
-		if ((unsigned int)abs(diffWorkingSetSizeKb) >= memorySize) {	/* 内存变动超过监控值 */
-			/* 缓存当前内存值 */
-			preWorkingSetSizeKb = workingSetSizeKb;
-			preWorkSetPrivateKb = workSetPrivateKb;
-			preWorkSetSharedKb = workSetSharedKb;
-			/* Kb转Mb */
-			double workingSetSizeMb = (double)workingSetSizeKb / 1024;
-			double workSetPrivateMb = (double)workSetPrivateKb / 1024;
-			double workSetSharedMb = (double)workSetSharedKb / 1024;
-			/* 打印日志 */
-			try {
-				char buf[256] = { 0 };
-				if (isInit) {	/* 首次 */
-					isInit = false;
-					sprintf_s(buf, "Memory: WorkingSet %0.1f Mb(%d Kb), Private %0.1f Mb(%d Kb), Shared %0.1f Mb(%d Kb)",
-						workingSetSizeMb, workingSetSizeKb, workSetPrivateMb, workSetPrivateKb, workSetSharedMb, workSetSharedKb);
-					Logger::getInstance()->print(buf, "", false, true);
-					memset(buf, 0, sizeof(buf));
-					sprintf_s(buf, "Handles: %d", handles);
-					Logger::getInstance()->print(buf, "", false, true);
-					memset(buf, 0, sizeof(buf));
-					sprintf_s(buf, "Threads: %d", threads);
-					Logger::getInstance()->print(buf, "", false, true);
-				}
-				else {	/* 非首次 */
-					/* 内存差值单位Kb转Mb */
-					double diffWorkingSetSizeMb = (double)diffWorkingSetSizeKb / 1024;
-					double diffWorkSetPrivateMb = (double)diffWorkSetPrivateKb / 1024;
-					double diffWorkSetSharedMb = (double)diffWorkSetSharedKb / 1024;
-					Logger::getInstance()->print("----------------------------------------------------------------------", "", false, true);
-					if (0 == diffWorkingSetSizeKb) {
-						sprintf_s(buf, "                     Memory: WorkingSet %0.1f Mb(%d Kb)", workingSetSizeMb, workingSetSizeKb);
-					}
-					else {
-						sprintf_s(buf, "                     Memory: WorkingSet %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
-							workingSetSizeMb, workingSetSizeKb, (diffWorkingSetSizeKb > 0 ? "+" : "-"), abs(diffWorkingSetSizeMb), abs(diffWorkingSetSizeKb));
-					}
-					Logger::getInstance()->print(buf, "", false, false);
-					memset(buf, 0, sizeof(buf));
-					if (0 == diffWorkSetPrivateKb) {
-						sprintf_s(buf, "                                Private %0.1f Mb(%d Kb)", workSetPrivateMb, workSetPrivateKb);
-					}
-					else {
-						sprintf_s(buf, "                                Private %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
-							workSetPrivateMb, workSetPrivateKb, (diffWorkSetPrivateKb > 0 ? "+" : "-"), abs(diffWorkSetPrivateMb), abs(diffWorkSetPrivateKb));
-					}
-					Logger::getInstance()->print(buf, "", false, false);
-					memset(buf, 0, sizeof(buf));
-					if (0 == diffWorkSetSharedKb) {
-						sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb)", workSetSharedMb, workSetSharedKb);
-					}
-					else {
-						sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
-							workSetSharedMb, workSetSharedKb, (diffWorkSetSharedKb > 0 ? "+" : "-"), abs(diffWorkSetSharedMb), abs(diffWorkSetSharedKb));
-					}
-					Logger::getInstance()->print(buf, "", false, false);
-					memset(buf, 0, sizeof(buf));
-					sprintf_s(buf, "                     Handles: %d", handles);
-					Logger::getInstance()->print(buf, "", false, false);
-					memset(buf, 0, sizeof(buf));
-					sprintf_s(buf, "                     Threads: %d", threads);
-					Logger::getInstance()->print(buf, "", false, false);
-				}
-			}
-			catch (const std::exception& e) {
-				Logger::getInstance()->print("", "", false, false);
-				Logger::getInstance()->print("execption: " + std::string(e.what()), "", false, true);
-			}
-			catch (...) {
-				Logger::getInstance()->print("", "", false, false);
-				Logger::getInstance()->print("unknow exception", "", false, true);
-			}
-			/* 写入excel */
-			unsigned long index = 0;
-			{
-				std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
-				g_excelIndex += 1;
-				index = g_excelIndex;
-			}
-			setExcelRow(index, workingSetSizeKb, diffWorkingSetSizeKb, workSetPrivateKb, diffWorkSetPrivateKb, workSetSharedKb, diffWorkSetSharedKb, handles, threads);
-		}
-		std::this_thread::sleep_for(std::chrono::seconds(frequence));
+/* 统计分析 */
+bool statisticalAnalysis(unsigned int pid, unsigned int memorySize, bool force) {
+	unsigned long workingSetSize, workSetPrivate, workSetShared;
+	unsigned long handles;
+	unsigned long threads;
+	queryProcessInfo(pid, workingSetSize, workSetPrivate, workSetShared, handles, threads);
+	if (0 == workingSetSize) {
+		return false;
 	}
+	if (0 == workSetPrivate || 0 == workSetShared) {
+		return true;
+	}
+	/* 字节转Kb */
+	int workingSetSizeKb = workingSetSize / 1024;
+	int workSetPrivateKb = workSetPrivate / 1024;
+	int workSetSharedKb = workSetShared / 1024;
+	/* 计算内存差值(单位:Kb) */
+	int diffWorkingSetSizeKb = workingSetSizeKb - g_preWorkingSetSizeKb;
+	int diffWorkSetPrivateKb = workSetPrivateKb - g_preWorkSetPrivateKb;
+	int diffWorkSetSharedKb = workSetSharedKb - g_preWorkSetSharedKb;
+	if (force || (unsigned int)abs(diffWorkingSetSizeKb) >= memorySize) {	/* 强制或者内存变动超过监控值 */
+		/* 缓存当前内存值 */
+		g_preWorkingSetSizeKb = workingSetSizeKb;
+		g_preWorkSetPrivateKb = workSetPrivateKb;
+		g_preWorkSetSharedKb = workSetSharedKb;
+		/* Kb转Mb */
+		double workingSetSizeMb = (double)workingSetSizeKb / 1024;
+		double workSetPrivateMb = (double)workSetPrivateKb / 1024;
+		double workSetSharedMb = (double)workSetSharedKb / 1024;
+		/* 打印日志 */
+		char buf[256] = { 0 };
+		if (g_isInit) {	/* 首次 */
+			g_isInit = false;
+			sprintf_s(buf, "Memory: WorkingSet %0.1f Mb(%d Kb), Private %0.1f Mb(%d Kb), Shared %0.1f Mb(%d Kb)",
+				workingSetSizeMb, workingSetSizeKb, workSetPrivateMb, workSetPrivateKb, workSetSharedMb, workSetSharedKb);
+			Logger::getInstance()->print(buf, "", false, true);
+			memset(buf, 0, sizeof(buf));
+			sprintf_s(buf, "Handles: %d", handles);
+			Logger::getInstance()->print(buf, "", false, true);
+			memset(buf, 0, sizeof(buf));
+			sprintf_s(buf, "Threads: %d", threads);
+			Logger::getInstance()->print(buf, "", false, true);
+		}
+		else {	/* 非首次 */
+			/* 内存差值单位Kb转Mb */
+			double diffWorkingSetSizeMb = (double)diffWorkingSetSizeKb / 1024;
+			double diffWorkSetPrivateMb = (double)diffWorkSetPrivateKb / 1024;
+			double diffWorkSetSharedMb = (double)diffWorkSetSharedKb / 1024;
+			Logger::getInstance()->print("----------------------------------------------------------------------", "", false, true);
+			if (0 == diffWorkingSetSizeKb) {
+				sprintf_s(buf, "                     Memory: WorkingSet %0.1f Mb(%d Kb)", workingSetSizeMb, workingSetSizeKb);
+			}
+			else {
+				sprintf_s(buf, "                     Memory: WorkingSet %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
+					workingSetSizeMb, workingSetSizeKb, (diffWorkingSetSizeKb > 0 ? "+" : "-"), abs(diffWorkingSetSizeMb), abs(diffWorkingSetSizeKb));
+			}
+			Logger::getInstance()->print(buf, "", false, false);
+			memset(buf, 0, sizeof(buf));
+			if (0 == diffWorkSetPrivateKb) {
+				sprintf_s(buf, "                                Private %0.1f Mb(%d Kb)", workSetPrivateMb, workSetPrivateKb);
+			}
+			else {
+				sprintf_s(buf, "                                Private %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
+					workSetPrivateMb, workSetPrivateKb, (diffWorkSetPrivateKb > 0 ? "+" : "-"), abs(diffWorkSetPrivateMb), abs(diffWorkSetPrivateKb));
+			}
+			Logger::getInstance()->print(buf, "", false, false);
+			memset(buf, 0, sizeof(buf));
+			if (0 == diffWorkSetSharedKb) {
+				sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb)", workSetSharedMb, workSetSharedKb);
+			}
+			else {
+				sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
+					workSetSharedMb, workSetSharedKb, (diffWorkSetSharedKb > 0 ? "+" : "-"), abs(diffWorkSetSharedMb), abs(diffWorkSetSharedKb));
+			}
+			Logger::getInstance()->print(buf, "", false, false);
+			memset(buf, 0, sizeof(buf));
+			sprintf_s(buf, "                     Handles: %d", handles);
+			Logger::getInstance()->print(buf, "", false, false);
+			memset(buf, 0, sizeof(buf));
+			sprintf_s(buf, "                     Threads: %d", threads);
+			Logger::getInstance()->print(buf, "", false, false);
+		}
+		/* 写入excel */
+		++g_excelIndex;
+		setExcelRow(g_excelIndex, workingSetSizeKb, diffWorkingSetSizeKb, workSetPrivateKb, diffWorkSetPrivateKb, workSetSharedKb, diffWorkSetSharedKb, handles, threads);
+	}
+	return true;
 }
 
 /* 检测输出文件名前缀中无效的字符 */
@@ -534,8 +517,16 @@ int main(int argc, char* argv[]) {
 	Logger::getInstance()->print("monitoring freq: " + std::to_string(freq) + " s", "", false, true);
 	/* 创建监控线程 */
 	std::thread th([&]() {
-		monitorHandler(pid, size, freq);
-		exit(0);
+		while (1) {
+			if (statisticalAnalysis(pid, size, false)) {
+				std::this_thread::sleep_for(std::chrono::seconds(freq));
+			}
+			else {
+				Logger::getInstance()->print("", "", false, false);
+				Logger::getInstance()->print("Can't find process with pid[" + std::to_string(pid) + "] !!!", "", false, true);
+				exit(0);
+			}
+		}
 		});
 	th.detach();
 	/* 接收输入 */
@@ -545,6 +536,8 @@ int main(int argc, char* argv[]) {
 	{
 		if ("exit" == cmd || "quit" == cmd || "q" == cmd)
 		{
+			statisticalAnalysis(pid, size, true);
+			Logger::getInstance()->print("", "", false, false);
 			Logger::getInstance()->print("exit application !!!", "", false, true);
 			break;
 		}
@@ -557,12 +550,7 @@ int main(int argc, char* argv[]) {
 				std::string tag = cmd.substr(p + TAG.length(), cmd.length() - TAG.length());
 				Logger::getInstance()->print(tag, "tag", true, true);
 				/* 在excel文件中, tag标记在最近一次监控记录的G列位置 */
-				unsigned long index = 0;
-				{
-					std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
-					index = g_excelIndex;
-				}
-				setExcelTag(index, tag);
+				setExcelTag(g_excelIndex, tag);
 			}
 			else {
 				std::cout << "Invalid command: " << cmd << " !!!" << std::endl;
