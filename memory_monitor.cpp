@@ -234,17 +234,23 @@ void setExcelRow(unsigned int index, double workingSetSizeMb, double workSetPriv
 	g_excelSheet.cell("A" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("A" + std::to_string(index)).value(datetime);
 
+	char workingSetSizeMbStr[16] = { 0 };
+	sprintf_s(workingSetSizeMbStr, "%0.1f", workingSetSizeMb);
 	g_excelSheet.cell("B" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
-	g_excelSheet.cell("B" + std::to_string(index)).number_format(xlnt::number_format::number_comma_separated1());
-	g_excelSheet.cell("B" + std::to_string(index)).value(workingSetSizeMb);
+	g_excelSheet.cell("B" + std::to_string(index)).number_format(xlnt::number_format::general());
+	g_excelSheet.cell("B" + std::to_string(index)).value(std::atof(workingSetSizeMbStr));
 
+	char workSetPrivateMbStr[16] = { 0 };
+	sprintf_s(workSetPrivateMbStr, "%0.1f", workSetPrivateMb);
 	g_excelSheet.cell("C" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
-	g_excelSheet.cell("C" + std::to_string(index)).number_format(xlnt::number_format::number_comma_separated1());
-	g_excelSheet.cell("C" + std::to_string(index)).value(workSetPrivateMb);
+	g_excelSheet.cell("C" + std::to_string(index)).number_format(xlnt::number_format::general());
+	g_excelSheet.cell("C" + std::to_string(index)).value(std::atof(workSetPrivateMbStr));
 
+	char workSetSharedMbMbStr[16] = { 0 };
+	sprintf_s(workSetSharedMbMbStr, "%0.1f", workSetSharedMb);
 	g_excelSheet.cell("D" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
-	g_excelSheet.cell("D" + std::to_string(index)).number_format(xlnt::number_format::number_comma_separated1());
-	g_excelSheet.cell("D" + std::to_string(index)).value(workSetSharedMb);
+	g_excelSheet.cell("D" + std::to_string(index)).number_format(xlnt::number_format::general());
+	g_excelSheet.cell("D" + std::to_string(index)).value(std::atof(workSetSharedMbMbStr));
 
 	g_excelSheet.cell("E" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("E" + std::to_string(index)).value((unsigned int)handes);
@@ -464,9 +470,12 @@ int main(int argc, char* argv[]) {
 			Logger::getInstance()->print("exit application !!!", "", false, true);
 			break;
 		}
+		else if (TAG == cmd) {
+			std::cout << "Invalid tag, missing tag name !!!" << std::endl;
+		}
 		else {
 			std::size_t p = cmd.find(TAG);
-			if (std::string::npos != p && TAG != cmd) {
+			if (std::string::npos != p) {
 				std::string tag = cmd.substr(p + TAG.length(), cmd.length() - TAG.length());
 				Logger::getInstance()->print(tag, "tag", true, true);
 				unsigned long index = 0;
@@ -475,6 +484,9 @@ int main(int argc, char* argv[]) {
 					index = g_excelIndex;
 				}
 				setExcelTag(index, tag);
+			}
+			else {
+				std::cout << "Invalid command: " << cmd << " !!!" << std::endl;
 			}
 		}
 	}
