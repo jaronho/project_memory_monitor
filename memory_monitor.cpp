@@ -387,12 +387,43 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 	}
 }
 
+/* 检测输出文件名前缀中无效的字符 */
+char checkInvalidPrefixChar(const std::string& prefix) {
+	if (!prefix.empty()) {
+		const static std::string& specialCharacters = "~!@#$%^&()_+`-={}[];',.";
+		for (std::size_t i = 0, len = prefix.length(); i < len; ++i) {
+			char ch = prefix.at(i);
+			if (ch >= 48 && ch <= 57) {	/* 数字 */
+				continue;
+			}
+			else if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122)) {	/* 大小写字母 */
+				continue;
+			}
+			/* 判断是否为有效的特殊字符 */
+			bool isSpecialChar = false;
+			for (std::size_t k = 0; k < specialCharacters.length(); ++k) {
+				if (specialCharacters[k] == ch) {
+					isSpecialChar = true;
+					break;
+				}
+			}
+			if (isSpecialChar) {
+				continue;
+			}
+			/* 无效字符 */
+			return ch;
+		}
+	}
+	return '\0';
+}
+
 int main(int argc, char* argv[]) {
 	/* 命令行解析 */
 	cmdline::parser cl;
 	cl.add<unsigned int>("pid", 'p', "process id", true);
-	cl.add<unsigned int>("size", 's', "memory fluctuation size(Kb)", false, 1, cmdline::range(1, 102400)); /* 1Kb~100Mb */
+	cl.add<unsigned int>("size", 's', "memory fluctuation size(Kb)", false, 512, cmdline::range(1, 102400)); /* 1Kb~100Mb */
 	cl.add<unsigned int>("freq", 'f', "monitoring frequence(Seconds)", false, 1, cmdline::range(1, 86400));	/* 1s~1天 */
+	cl.add<std::string>("prefix", 'x', "the prefix of the output filename, valid characters: [0-9][a-z][A-Z] or ~!@#$%^&()_+`-={}[];',.", false);
 	cl.add("help", 0, "print this message");
 	cl.set_program_name("memory_monitor");
 	if (!cl.parse(argc, argv)) {
@@ -431,23 +462,42 @@ int main(int argc, char* argv[]) {
 	{
 		freq = 1;
 	}
-	/* 生成文件名 */
+	/* 输出文件名前缀 */
+	std::string prefix;
+	if (cl.exist("prefix")) {
+		prefix = cl.get<std::string>("prefix");
+	}
+	char invalidChar = checkInvalidPrefixChar(prefix);
+	if ('\0' != invalidChar) {
+		std::cerr << "prefix include invalid character [" << invalidChar << "]" << std::endl << cl.usage();
+		return 0;
+	}
+	/* 生成输出文件名 */
 	std::string dirname = "log/";
 	if (0 != _access(dirname.c_str(), 0)) {
 		if (0 != _mkdir(dirname.c_str())) {
 			dirname.clear();
 		}
 	}
-	std::string filenamePrefx = dirname + "pid[" + std::to_string(pid) + "]-";
+	std::string filename = dirname + prefix + "pid[" + std::to_string(pid) + "]-";
 	/* 设置日志文件名 */
-	Logger::getInstance()->setFilename(filenamePrefx + generateFilename(".log"));
+	std::string logFilename = filename + generateFilename(".log");
+	Logger::getInstance()->setFilename(logFilename);
 	/* 设置excel文件名 */
-	g_excelFilename = filenamePrefx + generateFilename(".xlsx");
+	g_excelFilename = filename + generateFilename(".xlsx");
 	setExcelHeader();
-	/* 初始打印 */
+	/* 打印提示 */
 	std::cout << "Note: 1. you can enter 'exit' or 'quit' or 'q' to exit application !!!" << std::endl;
 	std::cout << "      2. you can enter a string starting with 'tag=' to mark log sometime !!!" << std::endl;
 	std::cout << "         e.g. 'tag=mytag'" << std::endl << std::endl;
+	/* 打印输出文件路径 */
+	char* currPath = getcwd(NULL, 0);
+	std::cout << "Output:   log file => " << (currPath ? std::string(currPath) + "/" : "") << logFilename << std::endl;
+	std::cout << "        excel file => " << (currPath ? std::string(currPath) + "/" : "") << g_excelFilename << std::endl << std::endl;
+	if (currPath) {
+		free(currPath);
+	}
+	/* 打印配置 */
 	Logger::getInstance()->print("Start monitoring memory fluctuations", "", false, true);
 	double sizeMb = (double)size / 1024;
 	char buf[64] = { 0 };
