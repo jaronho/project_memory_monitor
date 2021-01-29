@@ -170,16 +170,14 @@ void queryProcessInfo(unsigned long processId,
 
 /* 保存excel文件 */
 void saveExcelFile() {
-	if (g_excelFilename.empty()) {
-		return;
+	if (!g_excelFilename.empty()) {
+		g_excel.save(g_excelFilename);
 	}
-	g_excel.save(g_excelFilename);
 }
 
 /* 设置excel标题头 */
 void setExcelHeader() {
 	std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
-
 	/* 日期 */
 	g_excelSheet.column_properties(xlnt::column_t("A")).width = 19.38;
 	g_excelSheet.cell("A1").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
@@ -192,16 +190,16 @@ void setExcelHeader() {
 	g_excelSheet.cell("B1").font(xlnt::font().bold(true));
 	g_excelSheet.cell("B1").value("Memory(Mb)");
 	g_excelSheet.merge_cells("B1:D1");
-	/* 工作集 */
+	/* 工作集(内存) */
 	g_excelSheet.cell("B2").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("B2").font(xlnt::font().bold(true));
 	g_excelSheet.cell("B2").value("WorkingSetSize");
-	/* 专用 */
+	/* 内存(专用工作集) */
 	g_excelSheet.column_properties(xlnt::column_t("C")).width = 14.38;
 	g_excelSheet.cell("C2").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("C2").font(xlnt::font().bold(true));
 	g_excelSheet.cell("C2").value("WorkSetPrivate");
-	/* 共用 */
+	/* 内存(共享工作集) */
 	g_excelSheet.column_properties(xlnt::column_t("D")).width = 14.5;
 	g_excelSheet.cell("D2").alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("D2").font(xlnt::font().bold(true));
@@ -218,14 +216,14 @@ void setExcelHeader() {
 	g_excelSheet.cell("F1").font(xlnt::font().bold(true));
 	g_excelSheet.cell("F1").value("Threads");
 	g_excelSheet.merge_cells("F1:F2");
-
+	/* 保存 */
 	saveExcelFile();
 }
 
 /* 设置excel行内容 */
-void setExcelRow(unsigned int index, double workingSetSizeMb, double workSetPrivateMb, double workSetSharedMb, unsigned long handes, unsigned long threads) {
+void setExcelRow(unsigned int index, int workingSetSizeKb, int diffWorkingSetSizeKb, int workSetPrivateKb, int diffWorkSetPrivateKb, int workSetSharedKb, int diffWorkSetSharedKb, int handes, int threads) {
 	std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
-
+	/* 日期 */
 	time_t now;
 	time(&now);
 	struct tm t = *localtime(&now);
@@ -233,45 +231,71 @@ void setExcelRow(unsigned int index, double workingSetSizeMb, double workSetPriv
 	strftime(datetime, sizeof(datetime), "%Y-%m-%d %H:%M:%S", &t);
 	g_excelSheet.cell("A" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("A" + std::to_string(index)).value(datetime);
-
-	char workingSetSizeMbStr[16] = { 0 };
-	sprintf_s(workingSetSizeMbStr, "%0.1f", workingSetSizeMb);
+	/* 工作集(内存) */
+	char workingSetSizeMbStr[32] = { 0 };
+	sprintf_s(workingSetSizeMbStr, "%0.1f", (double)workingSetSizeKb / 1024);
+	char workingSetSizeComment[128] = { 0 };
+	if (3 == index || 0 == diffWorkingSetSizeKb) {	/* 第1行或者无差异 */
+		sprintf_s(workingSetSizeComment, "(%d Kb)", workingSetSizeKb);
+	}
+	else {
+		sprintf_s(workingSetSizeComment, "(%d Kb)\n%s%0.1f Mb\n(%d Kb)",
+			workingSetSizeKb, (diffWorkingSetSizeKb > 0 ? "+" : "-"), (double)abs(diffWorkingSetSizeKb) / 1024, abs(diffWorkingSetSizeKb));
+	}
 	g_excelSheet.cell("B" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("B" + std::to_string(index)).number_format(xlnt::number_format::general());
 	g_excelSheet.cell("B" + std::to_string(index)).value(std::atof(workingSetSizeMbStr));
-
-	char workSetPrivateMbStr[16] = { 0 };
-	sprintf_s(workSetPrivateMbStr, "%0.1f", workSetPrivateMb);
+	g_excelSheet.cell("B" + std::to_string(index)).comment(xlnt::comment(workingSetSizeComment, ""));
+	/* 内存(专用工作集) */
+	char workSetPrivateMbStr[32] = { 0 };
+	sprintf_s(workSetPrivateMbStr, "%0.1f", (double)workSetPrivateKb / 1024);
+	char workSetPrivateComment[128] = { 0 };
+	if (3 == index || 0 == diffWorkSetPrivateKb) {	/* 第1行或者无差异 */
+		sprintf_s(workSetPrivateComment, "(%d Kb)", workSetPrivateKb);
+	}
+	else {
+		sprintf_s(workSetPrivateComment, "(%d Kb)\n%s%0.1f Mb\n(%d Kb)",
+			workSetPrivateKb, (diffWorkSetPrivateKb > 0 ? "+" : "-"), (double)abs(diffWorkSetPrivateKb) / 1024, abs(diffWorkSetPrivateKb));
+	}
 	g_excelSheet.cell("C" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("C" + std::to_string(index)).number_format(xlnt::number_format::general());
 	g_excelSheet.cell("C" + std::to_string(index)).value(std::atof(workSetPrivateMbStr));
-
-	char workSetSharedMbMbStr[16] = { 0 };
-	sprintf_s(workSetSharedMbMbStr, "%0.1f", workSetSharedMb);
+	g_excelSheet.cell("C" + std::to_string(index)).comment(xlnt::comment(workSetPrivateComment, ""));
+	/* 内存(共享工作集) */
+	char workSetSharedMbStr[32] = { 0 };
+	sprintf_s(workSetSharedMbStr, "%0.1f", (double)workSetSharedKb / 1024);
+	char workSetSharedComment[128] = { 0 };
+	if (3 == index || 0 == diffWorkSetSharedKb) {	/* 第1行或者无差异 */
+		sprintf_s(workSetSharedComment, "(%d Kb)", workSetSharedKb);
+	}
+	else {
+		sprintf_s(workSetSharedComment, "(%d Kb)\n%s%0.1f Mb\n(%d Kb)",
+			workSetSharedKb, (diffWorkSetSharedKb > 0 ? "+" : "-"), (double)abs(diffWorkSetSharedKb) / 1024, abs(diffWorkSetSharedKb));
+	}
 	g_excelSheet.cell("D" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
 	g_excelSheet.cell("D" + std::to_string(index)).number_format(xlnt::number_format::general());
-	g_excelSheet.cell("D" + std::to_string(index)).value(std::atof(workSetSharedMbMbStr));
-
+	g_excelSheet.cell("D" + std::to_string(index)).value(std::atof(workSetSharedMbStr));
+	g_excelSheet.cell("D" + std::to_string(index)).comment(xlnt::comment(workSetSharedComment, ""));
+	/* 句柄数 */
 	g_excelSheet.cell("E" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
-	g_excelSheet.cell("E" + std::to_string(index)).value((unsigned int)handes);
-
+	g_excelSheet.cell("E" + std::to_string(index)).value(handes);
+	/* 线程数 */
 	g_excelSheet.cell("F" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
-	g_excelSheet.cell("F" + std::to_string(index)).value((unsigned int)threads);
-
+	g_excelSheet.cell("F" + std::to_string(index)).value(threads);
+	/* 保存 */
 	saveExcelFile();
 }
 
 /* 设置excel标记 */
 void setExcelTag(unsigned int index, const std::string& tag) {
 	std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
-
-	g_excelSheet.cell("G" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
-	g_excelSheet.cell("G" + std::to_string(index)).fill(xlnt::fill::solid(xlnt::color(xlnt::rgb_color(255, 192, 0))));
-	/* 标记累加 */
+	/* 标记拼接 */
 	std::string newTag = g_excelSheet.cell("G" + std::to_string(index)).to_string();
 	newTag += (newTag.empty() ? "" : ",") + tag;
+	g_excelSheet.cell("G" + std::to_string(index)).alignment(xlnt::alignment().horizontal(xlnt::horizontal_alignment::center).vertical(xlnt::vertical_alignment::center));
+	g_excelSheet.cell("G" + std::to_string(index)).fill(xlnt::fill::solid(xlnt::color(xlnt::rgb_color(255, 192, 0))));	/* 标记单元格用颜色填充 */
 	g_excelSheet.cell("G" + std::to_string(index)).value(newTag);
-
+	/* 保存 */
 	saveExcelFile();
 }
 
@@ -337,7 +361,7 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 					}
 					else {
 						sprintf_s(buf, "                     Memory: WorkingSet %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
-							workingSetSizeMb, workingSetSizeKb, diffWorkingSetSizeKb > 0 ? "+" : "-", abs(diffWorkingSetSizeMb), abs(diffWorkingSetSizeKb));
+							workingSetSizeMb, workingSetSizeKb, (diffWorkingSetSizeKb > 0 ? "+" : "-"), abs(diffWorkingSetSizeMb), abs(diffWorkingSetSizeKb));
 					}
 					Logger::getInstance()->print(buf, "", false, false);
 					memset(buf, 0, sizeof(buf));
@@ -346,7 +370,7 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 					}
 					else {
 						sprintf_s(buf, "                                Private %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
-							workSetPrivateMb, workSetPrivateKb, diffWorkSetPrivateKb > 0 ? "+" : "-", abs(diffWorkSetPrivateMb), abs(diffWorkSetPrivateKb));
+							workSetPrivateMb, workSetPrivateKb, (diffWorkSetPrivateKb > 0 ? "+" : "-"), abs(diffWorkSetPrivateMb), abs(diffWorkSetPrivateKb));
 					}
 					Logger::getInstance()->print(buf, "", false, false);
 					memset(buf, 0, sizeof(buf));
@@ -355,7 +379,7 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 					}
 					else {
 						sprintf_s(buf, "                                 Shared %0.1f Mb(%d Kb), %s%0.1f Mb(%d Kb)",
-							workSetSharedMb, workSetSharedKb, diffWorkSetSharedKb > 0 ? "+" : "-", abs(diffWorkSetSharedMb), abs(diffWorkSetSharedKb));
+							workSetSharedMb, workSetSharedKb, (diffWorkSetSharedKb > 0 ? "+" : "-"), abs(diffWorkSetSharedMb), abs(diffWorkSetSharedKb));
 					}
 					Logger::getInstance()->print(buf, "", false, false);
 					memset(buf, 0, sizeof(buf));
@@ -381,7 +405,7 @@ void monitorHandler(unsigned int pid, unsigned int memorySize, unsigned int freq
 				g_excelIndex += 1;
 				index = g_excelIndex;
 			}
-			setExcelRow(index, workingSetSizeMb, workSetPrivateMb, workSetSharedMb, handles, threads);
+			setExcelRow(index, workingSetSizeKb, diffWorkingSetSizeKb, workSetPrivateKb, diffWorkSetPrivateKb, workSetSharedKb, diffWorkSetSharedKb, handles, threads);
 		}
 		std::this_thread::sleep_for(std::chrono::seconds(frequence));
 	}
