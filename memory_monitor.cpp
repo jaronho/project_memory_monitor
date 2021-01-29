@@ -478,6 +478,7 @@ int main(int argc, char* argv[]) {
 			if (std::string::npos != p) {
 				std::string tag = cmd.substr(p + TAG.length(), cmd.length() - TAG.length());
 				Logger::getInstance()->print(tag, "tag", true, true);
+				/* 在excel文件中, tag标记在最近一次监控记录的G列位置 */
 				unsigned long index = 0;
 				{
 					std::lock_guard<std::recursive_mutex> locker(m_excelMutex);
@@ -492,4 +493,3 @@ int main(int argc, char* argv[]) {
 	}
 	return 0;
 }
-
