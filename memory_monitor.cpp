@@ -17,6 +17,8 @@
 #include <Psapi.h>
 #pragma comment(lib, "psapi.lib")
 
+#define VERSION "1.0"
+
 xlnt::workbook g_excel;
 xlnt::worksheet g_excelSheet = g_excel.active_sheet();
 std::string g_excelFilename;	/* excel文件名 */
@@ -510,6 +512,8 @@ int main(int argc, char* argv[]) {
 	/* 设置excel文件名 */
 	g_excelFilename = filename + generateFilename(".xlsx");
 	setExcelHeader();
+	/* 打印版本号 */
+	std::cout << "Version: " << VERSION << std::endl << std::endl;
 	/* 打印提示 */
 	std::cout << "Note: 1. you can enter 'exit' or 'quit' or 'q' to exit application !!!" << std::endl;
 	std::cout << "      2. you can enter a string starting with 'tag=' to mark log sometime !!!" << std::endl;
